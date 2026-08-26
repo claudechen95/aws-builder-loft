@@ -1,0 +1,5 @@
+# This SIA project targets the deep-research adapter.
+expenses.py
+policy.md
+prompts.py
+evals/expense.yaml

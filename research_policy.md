@@ -10,17 +10,23 @@ revise the plan as evidence changes, and only then synthesize.
 
 ## 2. Research depth
 
-Run at least three materially different searches and successfully read at least
-four relevant sources. For broad questions, cover the major dimensions rather
-than repeating near-identical queries. Follow important leads that appear while
-reading. If the request is too ambiguous to research responsibly, state the
-specific ambiguity and ask one focused question instead of inventing a scope.
+Run at least three materially different searches, label the distinct focus of
+each search, and successfully read at least four relevant sources across at
+least three domains. Rewording the same query does not create a new research
+focus. For broad questions, cover the major dimensions rather than repeating
+near-identical queries. Follow important leads that appear while reading. If the
+request is too ambiguous to research responsibly, state the specific ambiguity
+and ask one focused question instead of inventing a scope.
 
 ## 3. Source quality
 
 Prefer primary and authoritative sources: official documentation, government
 data, standards bodies, original research, company filings, and direct product
 pages. Use reputable secondary reporting for context or independent scrutiny.
+Read at least two primary or authoritative sources for every report unless they
+genuinely do not exist; in that case, explain the limitation explicitly. The
+source role supplied to the tool is a provisional classification, not proof of
+authority, and must be checked against the retrieved page.
 Cross-check consequential claims with another independent source when possible.
 Treat search-result snippets as leads, not evidence; cite only pages you read.
 
@@ -31,6 +37,9 @@ comparison must be supported by inline citations such as `[S1]` or `[S1][S3]`.
 Source IDs come from the tools. Never invent a source ID, title, quotation, URL,
 statistic, or publication date. Clearly label inference, uncertainty, conflicts,
 and missing evidence. Use short quotations only when the exact wording matters.
+Do not reconstruct a cause, chronology, pronunciation, or mechanism beyond what
+the read sources establish. Attribute claims to the source that actually makes
+them rather than to a more prestigious source elsewhere in the manifest.
 
 ## 5. Web safety
 

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#10110f" />
+    <meta name="description" content="A live evidence workspace for the Acme deep research agent." />
+    <title>Extra Deep Super Research</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Extra Deep Super Research home">
+        <span class="brand-mark"><i></i><i></i><i></i></span>
+        <span class="brand-name">
+          <strong>Extra Deep</strong>
+          <small>Super Research</small>
+        </span>
+      </a>
+      <div class="system-state"><span id="healthDot" class="status-dot"></span><span id="healthText">Checking agent</span></div>
+      <div class="edition">Research OS / 01</div>
+    </header>
+
+    <main>
+      <section id="composerView" class="composer-view">
+        <div class="hero-copy">
+          <p class="eyebrow">Deep research agent</p>
+          <h1>Ask a question.<br /><em>Watch the evidence form.</em></h1>
+          <p class="lede">Extra Deep Super Research turns open questions into traceable answers—searching across distinct angles, reading primary sources, and auditing every claim before it reaches you.</p>
+        </div>
+
+        <form id="researchForm" class="research-composer">
+          <label for="question">Your research question</label>
+          <textarea id="question" rows="4" maxlength="4000" placeholder="What do you want to understand deeply?" required></textarea>
+          <div class="composer-footer">
+            <div class="depth"><span></span> Multi-angle evidence audit</div>
+            <button id="submitButton" type="submit">Begin research <span>↗</span></button>
+          </div>
+        </form>
+
+        <div class="examples" aria-label="Example research questions">
+          <button data-question="Compare the strongest arguments and current evidence for four-day workweeks in knowledge-work companies.">Four-day workweeks</button>
+          <button data-question="What are the most credible near-term applications of solid-state batteries, and what technical barriers remain?">Solid-state batteries</button>
+          <button data-question="How are major cities adapting building codes for extreme heat, and which interventions have the best evidence?">Cities & extreme heat</button>
+        </div>
+      </section>
+
+      <section id="workspaceView" class="workspace-view" hidden>
+        <div class="workspace-head">
+          <div>
+            <p class="eyebrow">Active inquiry</p>
+            <h2 id="activeQuestion"></h2>
+          </div>
+          <button id="newResearch" class="ghost-button" type="button">New research</button>
+        </div>
+
+        <div class="workspace-grid">
+          <aside class="signal-panel">
+            <div class="panel-title"><span>Live signal</span><span id="elapsed">00:00</span></div>
+            <div class="radar" aria-hidden="true"><div class="sweep"></div><div class="radar-core"></div></div>
+            <div id="currentPhase" class="current-phase">Preparing the research plan</div>
+            <ol id="timeline" class="timeline" aria-live="polite"></ol>
+          </aside>
+
+          <article class="report-panel">
+            <div id="reportEmpty" class="report-empty">
+              <span class="scan-line"></span>
+              <p>Report surface</p>
+              <h3>The answer will resolve here as the evidence clears.</h3>
+            </div>
+            <div id="reportContent" class="report-content" hidden>
+              <div class="report-kicker">Evidence-audited report</div>
+              <div id="reportBody" class="report-body"></div>
+              <section class="sources-section">
+                <div class="section-heading"><h3>Verified sources</h3><span id="sourceCount">0 sources</span></div>
+                <div id="sourceList" class="source-list"></div>
+              </section>
+            </div>
+          </article>
+
+          <aside class="metrics-panel">
+            <div class="panel-title">Depth gates</div>
+            <div class="metric"><span>Angles</span><strong id="metricAngles">0<span>/3</span></strong></div>
+            <div class="meter"><i id="barAngles"></i></div>
+            <div class="metric"><span>Sources read</span><strong id="metricSources">0<span>/4</span></strong></div>
+            <div class="meter"><i id="barSources"></i></div>
+            <div class="metric"><span>Domains</span><strong id="metricDomains">0<span>/3</span></strong></div>
+            <div class="meter"><i id="barDomains"></i></div>
+            <div class="metric"><span>Authority</span><strong id="metricAuthority">0<span>/2</span></strong></div>
+            <div class="meter"><i id="barAuthority"></i></div>
+            <div class="run-meta"><span>Model</span><b id="modelName">—</b><span>Tokens</span><b id="tokenCount">—</b></div>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <footer><span>Built for questions that deserve more than a quick answer.</span><span>Local-first · Public web only</span></footer>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
