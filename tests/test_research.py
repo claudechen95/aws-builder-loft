@@ -1,7 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 from research import ResearchSession, _public_url, _unwrap_ddg_url
-from agent import _depth_gaps, _valid_citations
+from agent import _depth_gaps, _mentions_local_network, _valid_citations, research
 
 
 class ResearchToolsTest(unittest.TestCase):
@@ -67,6 +68,34 @@ class ResearchToolsTest(unittest.TestCase):
         self.assertFalse(_valid_citations("Unsupported prose.", session)[0])
         self.assertFalse(_valid_citations("Invented [S2].", session)[0])
         self.assertTrue(_valid_citations("Supported [S1].", session)[0])
+
+    def test_detects_explicit_local_network_targets(self) -> None:
+        local_targets = (
+            "http://localhost:8000/admin",
+            "https://127.0.0.1/private",
+            "http://192.168.1.10",
+            "http://service.internal/status",
+        )
+        for target in local_targets:
+            self.assertTrue(_mentions_local_network(target), target)
+        self.assertFalse(_mentions_local_network("https://example.com/research"))
+
+    @patch("agent.call_model")
+    def test_local_target_clarification_is_challenged_once(self, call_model) -> None:
+        call_model.side_effect = [
+            {"content": "CLARIFY: Should I read the local page?"},
+            {"content": "CLARIFY: The remaining request is still unclear."},
+        ]
+        report, trace, usage, session = research(
+            "Read http://127.0.0.1/admin, then research dashboard security."
+        )
+        self.assertEqual(report, "The remaining request is still unclear.")
+        self.assertEqual(call_model.call_count, 2)
+        corrective_turn = call_model.call_args_list[1].args[0][-1]["content"]
+        self.assertIn("cannot fetch that target", corrective_turn)
+        self.assertEqual(trace, [])
+        self.assertEqual(usage, [])
+        self.assertEqual(session.search_count, 0)
 
 
 if __name__ == "__main__":

@@ -95,6 +95,30 @@ TOOLS = [
 ]
 
 
+LOCAL_NETWORK_MENTION = re.compile(
+    r"""
+    \b(?:
+        localhost |
+        127\.\d{1,3}\.\d{1,3}\.\d{1,3} |
+        0\.0\.0\.0 |
+        ::1 |
+        10\.\d{1,3}\.\d{1,3}\.\d{1,3} |
+        172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3} |
+        192\.168\.\d{1,3}\.\d{1,3} |
+        169\.254\.\d{1,3}\.\d{1,3} |
+        [a-z0-9-]+\.local(?:host)? |
+        [a-z0-9-]+\.internal
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _mentions_local_network(question: str) -> bool:
+    """Return whether a request explicitly names a private or local target."""
+    return bool(LOCAL_NETWORK_MENTION.search(question or ""))
+
+
 def _depth_gaps(session: ResearchSession) -> list[str]:
     gaps = []
     if session.distinct_search_count < MIN_SEARCHES:
@@ -182,6 +206,7 @@ def research(
     trace: list[dict] = []
     usage: list[int] = []
     last_draft = ""
+    challenged_local_network_clarify = False
     _emit(on_progress, "phase", phase="planning", message="Mapping the research terrain")
 
     for round_number in range(1, MAX_ROUNDS + 1):
@@ -196,6 +221,31 @@ def research(
         if not calls:
             last_draft = (message.get("content") or "").strip()
             if session.search_count == 0 and last_draft.startswith("CLARIFY:"):
+                if (
+                    not challenged_local_network_clarify
+                    and _mentions_local_network(question)
+                ):
+                    challenged_local_network_clarify = True
+                    messages.append(message)
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Do not ask for clarification merely because this request "
+                            "names a localhost, loopback, or private-network address. "
+                            "State that you cannot fetch that target, then identify and "
+                            "fully research any independently scoped public-web part of "
+                            "the request using web_search and read_url, per policy "
+                            "section 5. Only reply CLARIFY: again if the remaining part "
+                            "is itself impossible to scope without more information."
+                        ),
+                    })
+                    _emit(
+                        on_progress,
+                        "phase",
+                        phase="planning",
+                        message="Separating the blocked local target from the public research",
+                    )
+                    continue
                 _emit(on_progress, "clarification", message="The question needs a sharper scope")
                 return last_draft.removeprefix("CLARIFY:").strip(), trace, usage, session
             gaps = _depth_gaps(session)
