@@ -11,6 +11,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Callable
 
 import httpx
 from dotenv import load_dotenv
@@ -28,7 +29,15 @@ PROXY_KEY = os.environ.get("LITELLM_PROXY_KEY", "").strip()
 MAX_ROUNDS = 14
 MIN_SEARCHES = 3
 MIN_READS = 4
+MIN_SOURCE_DOMAINS = 3
+MIN_AUTHORITATIVE_SOURCES = 2
 TIMEOUT_S = 120
+ProgressCallback = Callable[[dict], None]
+
+
+def _emit(callback: ProgressCallback | None, event: str, **details: object) -> None:
+    if callback:
+        callback({"event": event, **details})
 
 
 def _fn(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -50,17 +59,117 @@ TOOLS = [
         "Search the live public web. Results are leads; read a URL before citing it.",
         {
             "query": {"type": "string"},
+            "focus": {
+                "type": "string",
+                "description": (
+                    "Short label for this search's materially distinct research "
+                    "angle, such as official data, historical record, or criticism."
+                ),
+            },
             "max_results": {"type": "integer", "minimum": 1, "maximum": 8},
         },
-        ["query"],
+        ["query", "focus"],
     ),
     _fn(
         "read_url",
         "Read a public HTML, text, or PDF source and return citable content.",
-        {"url": {"type": "string"}},
-        ["url"],
+        {
+            "url": {"type": "string"},
+            "source_role": {
+                "type": "string",
+                "enum": [
+                    "primary",
+                    "authoritative_reference",
+                    "independent_secondary",
+                    "context",
+                ],
+                "description": (
+                    "Expected evidentiary role. Primary is an original record or "
+                    "first-party document; authoritative_reference is a recognized "
+                    "scholarly, government, standards, or reference work."
+                ),
+            },
+        },
+        ["url", "source_role"],
     ),
 ]
+
+
+LOCAL_NETWORK_MENTION = re.compile(
+    r"""
+    \b(?:
+        localhost |
+        127\.\d{1,3}\.\d{1,3}\.\d{1,3} |
+        0\.0\.0\.0 |
+        ::1 |
+        10\.\d{1,3}\.\d{1,3}\.\d{1,3} |
+        172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3} |
+        192\.168\.\d{1,3}\.\d{1,3} |
+        169\.254\.\d{1,3}\.\d{1,3} |
+        [a-z0-9-]+\.local(?:host)? |
+        [a-z0-9-]+\.internal
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _mentions_local_network(question: str) -> bool:
+    """Return whether a request explicitly names a private or local target."""
+    return bool(LOCAL_NETWORK_MENTION.search(question or ""))
+
+
+def _depth_gaps(session: ResearchSession) -> list[str]:
+    gaps = []
+    if session.distinct_search_count < MIN_SEARCHES:
+        gaps.append(
+            f"distinct research angles {session.distinct_search_count}/{MIN_SEARCHES}"
+        )
+    if session.read_count < MIN_READS:
+        gaps.append(f"successful source reads {session.read_count}/{MIN_READS}")
+    if session.source_domain_count < MIN_SOURCE_DOMAINS:
+        gaps.append(f"source domains {session.source_domain_count}/{MIN_SOURCE_DOMAINS}")
+    if session.authoritative_source_count < MIN_AUTHORITATIVE_SOURCES:
+        gaps.append(
+            "primary or authoritative sources "
+            f"{session.authoritative_source_count}/{MIN_AUTHORITATIVE_SOURCES}"
+        )
+    return gaps
+
+
+def _valid_citations(report: str, session: ResearchSession) -> tuple[bool, str]:
+    valid_ids = {item["source_id"] for item in session.manifest()}
+    cited_ids = set(re.findall(r"\[(S\d+)\]", report))
+    if not cited_ids:
+        return False, "The draft has no inline source citations."
+    invented = cited_ids - valid_ids
+    if invented:
+        return False, (
+            "The draft cites IDs that were not successfully read: "
+            + ", ".join(sorted(invented))
+        )
+    return True, ""
+
+
+def _audit_report(messages: list[dict], draft: str, usage: list[int]) -> str:
+    audit_messages = messages + [
+        {"role": "assistant", "content": draft},
+        {
+            "role": "user",
+            "content": (
+                "Act as a strict evidence editor. Return only a revised final report. "
+                "Check every factual claim against the successfully read source text "
+                "in this conversation. Remove or qualify claims that the evidence does "
+                "not directly support, especially reconstructed causes, chronology, "
+                "pronunciation, or causal explanations. Do not infer authority merely "
+                "from the submitted source_role. Attribute sources accurately, label "
+                "inference and uncertainty, and put inline source IDs on every material "
+                "claim. Cite only IDs from successful read_url calls."
+            ),
+        },
+    ]
+    audited = call_model(audit_messages, usage, tools=False)
+    return (audited.get("content") or draft).strip()
 
 
 def call_model(messages: list[dict], usage: list[int], tools: bool = True) -> dict:
@@ -85,7 +194,10 @@ def call_model(messages: list[dict], usage: list[int], tools: bool = True) -> di
     return body["choices"][0]["message"]
 
 
-def research(question: str) -> tuple[str, list[dict], list[int], ResearchSession]:
+def research(
+    question: str,
+    on_progress: ProgressCallback | None = None,
+) -> tuple[str, list[dict], list[int], ResearchSession]:
     session = ResearchSession()
     messages = [
         {"role": "system", "content": build_system()},
@@ -94,25 +206,63 @@ def research(question: str) -> tuple[str, list[dict], list[int], ResearchSession
     trace: list[dict] = []
     usage: list[int] = []
     last_draft = ""
+    challenged_local_network_clarify = False
+    _emit(on_progress, "phase", phase="planning", message="Mapping the research terrain")
 
-    for _ in range(MAX_ROUNDS):
+    for round_number in range(1, MAX_ROUNDS + 1):
+        _emit(
+            on_progress,
+            "model_round",
+            round=round_number,
+            message="Choosing the next evidence move",
+        )
         message = call_model(messages, usage)
         calls = message.get("tool_calls") or []
         if not calls:
             last_draft = (message.get("content") or "").strip()
             if session.search_count == 0 and last_draft.startswith("CLARIFY:"):
+                if (
+                    not challenged_local_network_clarify
+                    and _mentions_local_network(question)
+                ):
+                    challenged_local_network_clarify = True
+                    messages.append(message)
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Do not ask for clarification merely because this request "
+                            "names a localhost, loopback, or private-network address. "
+                            "State that you cannot fetch that target, then identify and "
+                            "fully research any independently scoped public-web part of "
+                            "the request using web_search and read_url, per policy "
+                            "section 5. Only reply CLARIFY: again if the remaining part "
+                            "is itself impossible to scope without more information."
+                        ),
+                    })
+                    _emit(
+                        on_progress,
+                        "phase",
+                        phase="planning",
+                        message="Separating the blocked local target from the public research",
+                    )
+                    continue
+                _emit(on_progress, "clarification", message="The question needs a sharper scope")
                 return last_draft.removeprefix("CLARIFY:").strip(), trace, usage, session
-            if session.search_count >= MIN_SEARCHES and session.read_count >= MIN_READS:
-                valid_ids = {item["source_id"] for item in session.manifest()}
-                cited_ids = set(re.findall(r"\[(S\d+)\]", last_draft))
-                if cited_ids and cited_ids <= valid_ids:
-                    return last_draft, trace, usage, session
-                citation_problem = (
-                    "The draft has no inline source citations."
-                    if not cited_ids
-                    else "The draft cites IDs that were not successfully read: "
-                         + ", ".join(sorted(cited_ids - valid_ids))
+            gaps = _depth_gaps(session)
+            if not gaps:
+                _emit(
+                    on_progress,
+                    "phase",
+                    phase="audit",
+                    message="Stress-testing every material claim",
                 )
+                audited_draft = _audit_report(messages, last_draft, usage)
+                citations_ok, citation_problem = _valid_citations(
+                    audited_draft, session
+                )
+                if citations_ok:
+                    _emit(on_progress, "phase", phase="complete", message="Evidence audit passed")
+                    return audited_draft, trace, usage, session
                 messages.append(message)
                 messages.append({
                     "role": "user",
@@ -122,15 +272,20 @@ def research(question: str) -> tuple[str, list[dict], list[int], ResearchSession
                     ),
                 })
                 continue
+            _emit(
+                on_progress,
+                "depth_check",
+                gaps=gaps,
+                message="Deepening coverage before synthesis",
+            )
             messages.append(message)
             messages.append({
                 "role": "user",
                 "content": (
                     "The research is not deep enough yet. Continue using tools. "
-                    f"Completed {session.search_count}/{MIN_SEARCHES} searches and "
-                    f"{session.read_count}/{MIN_READS} successful source reads. "
-                    "Use distinct queries, read authoritative sources, and cross-check "
-                    "the central claims before writing the report."
+                    "Remaining gates: " + "; ".join(gaps) + ". Use materially distinct "
+                    "focus labels and queries, diversify source domains, read primary "
+                    "or authoritative sources, and cross-check central claims."
                 ),
             })
             continue
@@ -143,6 +298,15 @@ def research(question: str) -> tuple[str, list[dict], list[int], ResearchSession
             except json.JSONDecodeError:
                 args = {}
             try:
+                _emit(
+                    on_progress,
+                    "tool_started",
+                    tool=name,
+                    query=args.get("query"),
+                    focus=args.get("focus"),
+                    url=args.get("url"),
+                    source_role=args.get("source_role"),
+                )
                 if name == "web_search":
                     result = session.web_search(**args)
                 elif name == "read_url":
@@ -152,6 +316,23 @@ def research(question: str) -> tuple[str, list[dict], list[int], ResearchSession
             except (httpx.HTTPError, TypeError, ValueError) as exc:
                 result = {"error": str(exc)}
             trace.append({"name": name, "args": args, "result": result})
+            _emit(
+                on_progress,
+                "tool_completed",
+                tool=name,
+                ok="error" not in result,
+                error=result.get("error"),
+                source_id=result.get("source_id"),
+                title=result.get("title"),
+                url=result.get("url") or args.get("url"),
+                source_role=result.get("source_role") or args.get("source_role"),
+                result_count=len(result.get("results") or []),
+                searches=session.search_count,
+                distinct_searches=session.distinct_search_count,
+                sources_read=session.read_count,
+                domains=session.source_domain_count,
+                authoritative=session.authoritative_source_count,
+            )
             messages.append({
                 "role": "tool",
                 "tool_call_id": call["id"],
@@ -166,8 +347,10 @@ def research(question: str) -> tuple[str, list[dict], list[int], ResearchSession
             "any limitations."
         ),
     })
+    _emit(on_progress, "phase", phase="synthesis", message="Writing the best-supported answer")
     final = call_model(messages, usage, tools=False)
     report = (final.get("content") or last_draft or "Research could not be completed.").strip()
+    _emit(on_progress, "phase", phase="complete", message="Research complete with noted limitations")
     return report, trace, usage, session
 
 
@@ -203,7 +386,10 @@ def main() -> int:
         "sources": session.manifest(),
         "research": {
             "searches": session.search_count,
+            "distinct_searches": session.distinct_search_count,
             "sources_read": session.read_count,
+            "source_domains": session.source_domain_count,
+            "authoritative_sources": session.authoritative_source_count,
             "model": MODEL,
         },
     }))

@@ -21,6 +21,12 @@ TIMEOUT_S = 20
 MAX_DOWNLOAD_BYTES = 12 * 1024 * 1024
 MAX_TEXT_CHARS = 8_000
 MAX_REDIRECTS = 5
+SOURCE_ROLES = {
+    "primary",
+    "authoritative_reference",
+    "independent_secondary",
+    "context",
+}
 
 
 @dataclass
@@ -30,6 +36,7 @@ class Source:
     url: str
     snippet: str = ""
     fetched: bool = False
+    source_role: str = "context"
 
 
 def _clean(text: str) -> str:
@@ -69,6 +76,32 @@ class ResearchSession:
         self._ids_by_url: dict[str, str] = {}
         self.search_count = 0
         self.read_count = 0
+        self._search_focuses: set[str] = set()
+
+    @staticmethod
+    def _normalize_focus(focus: str) -> str:
+        """Normalize a model-supplied research angle for diversity accounting."""
+        return " ".join(re.findall(r"[a-z0-9]+", _clean(focus).lower()))
+
+    @property
+    def distinct_search_count(self) -> int:
+        return len(self._search_focuses)
+
+    @property
+    def source_domain_count(self) -> int:
+        return len({
+            urlparse(source.url).hostname
+            for source in self.sources.values()
+            if source.fetched and urlparse(source.url).hostname
+        })
+
+    @property
+    def authoritative_source_count(self) -> int:
+        return sum(
+            source.fetched
+            and source.source_role in {"primary", "authoritative_reference"}
+            for source in self.sources.values()
+        )
 
     def _register(self, url: str, title: str = "", snippet: str = "") -> Source:
         normalized = url.strip()
@@ -86,10 +119,13 @@ class ResearchSession:
         self._ids_by_url[normalized] = source_id
         return source
 
-    def web_search(self, query: str, max_results: int = 6) -> dict:
+    def web_search(self, query: str, focus: str, max_results: int = 6) -> dict:
         query = _clean(query)
         if not query:
             return {"error": "A search query is required."}
+        normalized_focus = self._normalize_focus(focus)
+        if not normalized_focus:
+            return {"error": "A distinct research focus is required."}
         limit = max(1, min(int(max_results), 8))
         response = httpx.post(
             SEARCH_URL,
@@ -125,7 +161,13 @@ class ResearchSession:
             if len(results) >= limit:
                 break
         self.search_count += 1
-        return {"query": query, "results": results}
+        self._search_focuses.add(normalized_focus)
+        return {
+            "query": query,
+            "focus": _clean(focus),
+            "distinct_searches": self.distinct_search_count,
+            "results": results,
+        }
 
     def _download(self, url: str) -> tuple[httpx.Response, str]:
         current = _public_url(url)
@@ -145,10 +187,17 @@ class ResearchSession:
                 return response, current
         raise ValueError("Too many redirects.")
 
-    def read_url(self, url: str) -> dict:
+    def read_url(self, url: str, source_role: str) -> dict:
+        source_role = _clean(source_role).lower()
+        if source_role not in SOURCE_ROLES:
+            raise ValueError(
+                "source_role must be primary, authoritative_reference, "
+                "independent_secondary, or context."
+            )
         response, final_url = self._download(url)
         content_type = response.headers.get("content-type", "").lower()
         source = self._register(final_url)
+        first_successful_read = not source.fetched
         if "pdf" in content_type or final_url.lower().endswith(".pdf"):
             reader = PdfReader(io.BytesIO(response.content))
             pages = []
@@ -174,18 +223,33 @@ class ResearchSession:
             return {"error": "The page returned no readable text."}
         source.title = title or source.title or final_url
         source.fetched = True
-        self.read_count += 1
+        role_rank = {
+            "context": 0,
+            "independent_secondary": 1,
+            "authoritative_reference": 2,
+            "primary": 3,
+        }
+        if role_rank[source_role] >= role_rank[source.source_role]:
+            source.source_role = source_role
+        if first_successful_read:
+            self.read_count += 1
         return {
             "source_id": source.source_id,
             "title": source.title,
             "url": source.url,
+            "source_role": source.source_role,
             "content": text,
             "truncated": len(text) == MAX_TEXT_CHARS,
         }
 
     def manifest(self) -> list[dict]:
         return [
-            {"source_id": source.source_id, "title": source.title, "url": source.url}
+            {
+                "source_id": source.source_id,
+                "title": source.title,
+                "url": source.url,
+                "source_role": source.source_role,
+            }
             for source in self.sources.values()
             if source.fetched
         ]
@@ -196,7 +260,8 @@ class ResearchSession:
             return "--- VERIFIED SOURCES ---\nNo sources were successfully read."
         lines = ["--- VERIFIED SOURCES ---"]
         lines.extend(
-            f"[{item['source_id']}] {item['title']} — {item['url']}"
+            f"[{item['source_id']}] {item['title']} "
+            f"({item['source_role']}) — {item['url']}"
             for item in sources
         )
         return "\n".join(lines)

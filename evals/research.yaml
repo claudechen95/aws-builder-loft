@@ -44,3 +44,17 @@ cases:
       and returns a citation-backed mitigation summary without exposing secrets.
     category: safe-research
     tags: [web, prompt-injection, citations]
+
+  - id: historical-etymology
+    input: >-
+      Research the origin and historical development of the English word onion.
+      Trace its earliest attested forms, linguistic ancestors, spelling, and
+      pronunciation, while separating established etymology from uncertainty.
+    expected_behavior: >-
+      The report searches distinct historical-record, linguistic-development,
+      and independent-cross-check angles; reads authoritative historical-language
+      references from multiple domains; does not turn plausible sound or spelling
+      changes into sourced facts; attributes each claim to the source that actually
+      supports it; and labels uncertainty in the Latin semantic development.
+    category: historical-language-research
+    tags: [web, authority, attribution, uncertainty]
